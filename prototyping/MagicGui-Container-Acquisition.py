@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import napari
 
-JSON_PATH = r'C:\dev\napari-mesofield\prototyping\load_json_config.json'
-SAVE_DIR = r'C:/Users/John/Documents/Python Scripts/napari-micromanager/napari-micromanager/examples/data'
+JSON_PATH = r'C:\sipefield\napari-mesofield\prototyping\load_json_config.json'
+SAVE_DIR = r'D:\jgronemeyer'
 MM_CONFIG = r'C:/Program Files/Micro-Manager-2.0/mm-sipefield.cfg'
 THOR_CONFIG = r'C:/Program Files/Micro-Manager-2.0/ThorCam.cfg'
 
@@ -78,6 +78,7 @@ class AcquisitionEngine(Container):
         self._viewer = viewer
         self._mmc = mmc
         self.config = ExperimentConfig(JSON_PATH)
+        self.deque
         
         
         self._gui_save_directory = create_widget(
@@ -91,7 +92,6 @@ class AcquisitionEngine(Container):
         )
         self._gui_config_table = create_widget(
             label='Experiment Config:', widget_type='Table', is_result=True, 
-            #auto_call=True,
             value=self.config.df()
         )
         self._gui_record_button = create_widget(
@@ -127,23 +127,32 @@ class AcquisitionEngine(Container):
         mmc = self._mmc
         #mmc.getPropertyObject('Arduino-Switch', 'State').loadSequence(['4', '4', '2', '2'])
 
-
-        def save_image_to_disk(frame: tuple):
+        assert self.config.bids is not None, "No output directory specified."
+        assert self.config.num_frames is not None, "No number of frames specified."
+        #assert self.config.bids is str, "Output directory must be a string."
+        
+        def frame_to_napari(frame: tuple):
             image, metadata = frame
-            # print('received:', image, 'with MD', metadata)
-            # try:
-            #     recorded = self._viewer.layers['recording']
-            #     recorded.data = frame[0]
-            # except KeyError:
-            #     recorded = self._viewer.add_image(image, name='recording')
+            print('received:', image, 'with MD', metadata)
+            try:
+                recorded = self._viewer.layers['recording']
+                recorded.data = frame[0]
+            except KeyError:
+                recorded = self._viewer.add_image(image, name='recording')
+                
+        @thread_worker(connect={'yielded': frame_to_napari})
+        def save_to_disk(frame: tuple):
+            # with tifffile.TiffWriter(self.config.bids, bigtiff=True, append=True) as tif:
+            #     image, metadata = frame
+            #     try:
+            #         tif.write(image, datetime=True, software="Napari-mesofield")
+            #     except Exception as e:
+            #         print(f"Error while writing to TIFF file: {e}")
+            image, metadata = frame
+            tifffile.TiffWriter(self.config.bids, bigtiff=True, ome=True, append=True).write(image, datetime=True, software="Napari-mesofield")
+            yield frame
 
-            tifffile.TiffWriter(self.config.bids, bigtiff=True, append=True, ome=True).write(image, datetime=True, software="Micro-Manager")
-                # try:
-                #     tiff.write(image, datetime=True, software="Micro-Manager")
-                # except Exception as e:
-                #     print(f"Error while writing to TIFF file: {e}")
-
-        @thread_worker(connect={'yielded': save_image_to_disk})
+        @thread_worker(connect={'yielded': save_to_disk}, progress=True)
         def grab_frame_from_buffer(n_frames) -> np.array:
             while not self._gui_trigger_checkbox.value:
                 pass
@@ -162,8 +171,19 @@ class AcquisitionEngine(Container):
         @mmc.events.continuousSequenceAcquisitionStarted.connect             
         def read_mmc_event():
             print('Psychopy detected the start of mmc event')
-            
+           
         grab_frame_from_buffer(self.config.num_frames)  
+
+@magicgui(call_button='load arduino', mmc={'bind': pymmcore_plus.CMMCorePlus.instance()})   
+def load_mmc_params(mmc):
+    mmc.getPropertyObject('Arduino-Switch', 'State').loadSequence(['4', '4', '2', '2'])
+    mmc.mda.engine.use_hardware_sequencing = True
+    # mmc.setProperty('Arduino-Switch', 'Sequence', 'On')
+    # mmc.setProperty('Arduino-Shutter', 'OnOff', '0')
+    # mmc.setProperty('Dhyana', 'Output Trigger Port', '2')
+    # mmc.setProperty('Core', 'Shutter', 'Arduino-Shutter')
+    # mmc.setProperty('Dhyana', 'Gain', 'HDR')
+    print('Arduino loaded')
 
 def start_napari():
     
@@ -172,18 +192,13 @@ def start_napari():
     viewer = napari.Viewer()
     widget = AcquisitionEngine(viewer, mmc)
     viewer.window.add_plugin_dock_widget('napari-micromanager')
-    viewer.window.add_dock_widget(widget, area='right')
+    viewer.window.add_dock_widget([widget], 
+                                  area='right')
     
-    
-    napari.run()
     print("interface launched.")
-    mmc.mda.engine.use_hardware_sequencing = True
-    mmc.setProperty('Arduino-Switch', 'Sequence', 'On')
-    mmc.setProperty('Arduino-Shutter', 'OnOff', '0')
-    mmc.setProperty('Dhyana', 'Output Trigger Port', '2')
-    mmc.setProperty('Core', 'Shutter', 'Arduino-Shutter')
-    mmc.setProperty('Dhyana', 'Gain', 'HDR')
+
     viewer.update_console(locals()) # https://github.com/napari/napari/blob/main/examples/update_console.py
+    napari.run()
 
 # Launch Napari with the custom widget
 if __name__ == "__main__":
