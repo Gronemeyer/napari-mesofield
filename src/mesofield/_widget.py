@@ -35,9 +35,11 @@ from magicgui import magic_factory
 from magicgui.widgets import CheckBox, Container, create_widget
 from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget
 from skimage.util import img_as_float
+from pymmcore_widgets import InstallWidget
 
 if TYPE_CHECKING:
     import napari
+
 
 
 # Uses the `autogenerate: true` flag in the plugin manifest
@@ -61,7 +63,6 @@ def threshold_magic_widget(
     img_layer: "napari.layers.Image", threshold: "float"
 ) -> "napari.types.LabelsData":
     return img_as_float(img_layer.data) > threshold
-
 
 # if we want even more control over our widget, we can use
 # magicgui `Container`
@@ -118,12 +119,16 @@ class ExampleQWidget(QWidget):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
         self.viewer = viewer
+        
+        installer = InstallWidget()
 
         btn = QPushButton("Click me!")
         btn.clicked.connect(self._on_click)
 
         self.setLayout(QHBoxLayout())
         self.layout().addWidget(btn)
+        self.layout().addWidget(installer)
 
     def _on_click(self):
         print("napari has", len(self.viewer.layers), "layers")
+        

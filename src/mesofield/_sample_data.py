@@ -18,5 +18,6 @@ def make_sample_data():
     # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
     # Check the documentation for more information about the
     # add_image_kwargs
-    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    return [(numpy.random.rand(512, 512), {})]
+    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image    
+    for i in range(20): return [(numpy.random.rand(512, 512), {})] 
+        
