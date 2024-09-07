@@ -27,16 +27,49 @@ experimental_config = {'save_dir': '/path/to/save/directory',
                             'session_id': '---'}
 
 from magicgui.widgets import Container, CheckBox, create_widget
-
+import json
 class ExperimentConfig():
-    pass
+    def __init__(self, json_path: str):
+        self._config = self._load_json_config(json_path)
         
+    def _load_json_config(self, json_path: str):
+        with open(json_path) as file:
+            config = json.load(file)
+        return config
+    
+    def __getattr__(self, key):
+        return self._config.get(key)
+    
+    def __setattr__(self, key, value):
+        if key == '_config':
+            super().__setattr__(key, value)
+        else:
+            self._config[key] = value
+            self._update_bids_output_directory()
+    
+    def __str__(self):
+        return str(self._config)
+    
+    def df(self):
+        return pd.DataFrame(self._config.items(), columns=['Parameter', 'Value'])
+    
+    def _update_bids_output_directory(self):
+        date = datetime.datetime.now().strftime("%Y-%m-%d")
+        save_dir = self._config['save_dir']
+        protocol_id = self._config['protocol_id']
+        subject_id = self._config['subject_id']
+        session_id = self._config['session_id']
+        params = (date, protocol_id, subject_id, session_id)
+        self.bids = pathlib.Path(save_dir) / '%s_%s_%s_%s' % tuple(params)
+    
+
+
 class AcquisitionEngine(Container):
     def __init__(self, viewer: "napari.viewer.Viewer", mmc: pymmcore_plus.CMMCorePlus):
         super().__init__()
         self._viewer = viewer
         self._mmc = mmc
-        self.experiment_config = self._load_json_config()
+        self.config = ExperimentConfig(JSON_PATH)
         
         
         self._gui_save_directory = create_widget(
@@ -70,6 +103,7 @@ class AcquisitionEngine(Container):
     @staticmethod
     def _load_json_config(json_path: str):
         import json
+
         config_df = pd.DataFrame(columns=['Parameter', 'Value'])
 
         # Create a pandas dataframe from the JSON file; update and return the local config_df
@@ -85,7 +119,8 @@ class AcquisitionEngine(Container):
         return pathlib.Path(self.experiment_config['save_dir']) / f'{date}_{self.experiment_config["protocol_id"]}_{self.experiment_config["subject_id"]}_{self.experiment_config["session_id"]}'
     
     def _create_experiment_configurator(self):
-        
+        config = ExperimentConfig(self._gui_json_directory.value)
+        return config.df()
     
     def record_from_buffer(self, mmc: pymmcore_plus.CMMCorePlus, 
                        trigger: bool = experimental_config['start_on_trigger'],

@@ -12,7 +12,7 @@ import pathlib
 import datetime
 
 import pandas as pd
-
+import os
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import napari
@@ -21,6 +21,7 @@ JSON_PATH = r'C:\sipefield\PyLab\pylab\load-exp-params.json'
 SAVE_DIR = r'C:/Users/John/Documents/Python Scripts/napari-micromanager/napari-micromanager/examples/data'
 MM_CONFIG = r'C:/Program Files/Micro-Manager-2.0/mm-sipefield.cfg'
 THOR_CONFIG = r'C:/Program Files/Micro-Manager-2.0/ThorCam.cfg'
+PSYCHOPY_PATH =  r'C:\dev\sipefield-gratings\PsychoPy\Gratings_vis_stim_devSB-JG_v0.6.psyexp'
 
 experiment_config = {
                      'save_dir': '/path/to/save/directory',
@@ -32,6 +33,7 @@ experiment_config = {
                     }
 
 
+
 @magicgui(call_button='new mmc')
 def pupil_cam():
     mmc2 = pymmcore_plus.CMMCorePlus()
@@ -39,6 +41,10 @@ def pupil_cam():
     mmc2.setROI("ThorCam", 440, 305, 509, 509)
     viewer2 = napari.view_image(mmc2.snap(), name='pupil_viewer')
     viewer2.window.add_dock_widget([record_from_buffer])
+
+@magicgui(call_button='Launch PsychoPy')
+def launch_psychopy():
+    os.startfile(PSYCHOPY_PATH)
 
 
 @magicgui(auto_call=True, result_widget=True)
@@ -102,6 +108,10 @@ def record_from_buffer(mmc: pymmcore_plus.CMMCorePlus,
                     # circular buffer empty
                     pass
 
+    @mmc.events.continuousSequenceAcquisitionStarted.connect             
+    def read_mmc_event():
+        print('Psychopy detected the start of mmc event')
+
     grab_frame_from_buffer()
 
 @magicgui(call_button='Record2', viewer={'bind': napari.current_viewer()})
@@ -128,7 +138,8 @@ def start_napari():
                                    record_from_layer,
                                    load_arduino,
                                    unload_arduino,
-                                   display_experimental_config_table], 
+                                   display_experimental_config_table,
+                                   launch_psychopy], 
                                   area='right')
     
     
