@@ -89,9 +89,10 @@ def record_from_buffer(mmc: pymmcore_plus.CMMCorePlus,
         print('recieved:', image, 'with MD', metadata)
         try:
             recorded = viewer.layers["recording"]
-            recorded.data = frame[0]
+            recorded.append(frame[0])
         except KeyError:
             recorded = viewer.add_image(image, name="recording")
+
     
 
     @thread_worker(connect={'yielded': save_image_to_disk})

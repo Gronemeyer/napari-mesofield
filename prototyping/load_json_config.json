@@ -1,8 +1,0 @@
-{
-    "save_dir": "/path/to/save/directory",
-    "num_frames": 5000,
-    "start_on_trigger": true,
-    "protocol_id": "---",
-    "subject_id": "---",
-    "session_id": "---"
-}
