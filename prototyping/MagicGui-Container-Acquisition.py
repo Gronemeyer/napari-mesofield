@@ -10,7 +10,7 @@ from magicgui.tqdm import tqdm
 import pathlib
 import datetime
 import pandas as pd
-import tifffile
+
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import napari
@@ -27,17 +27,23 @@ DHYANA_CONFIG = r'C:/Program Files/Micro-Manager-2.0/mm-sipefield.cfg'
 THOR_CONFIG = r'C:/Program Files/Micro-Manager-2.0/ThorCam.cfg'
 PUPIL_JSON = r'C:\sipefield\napari-mesofield\prototyping\camk2-gcamp8_pupil.json'
 
-experimental_config = {'save_dir': '/path/to/save/directory',
-                            'num_frames': 5000,
-                            'start_on_trigger': True,
-                            'protocol_id': '---',
-                            'subject_id': '---',
-                            'session_id': '---'}
-
 from magicgui.widgets import Container, CheckBox, create_widget
 import json
 import keyboard
+
 class ExperimentConfig():
+    """ 
+    Class to dynamically handle an experiment configuration loaded from a json file
+    
+    Attributes:
+    - config: dict containing the configuration parameters loaded from a json file
+    
+    Methods:
+    df() -> pd.DataFrame: returns a pandas DataFrame of the configuration parameters
+    _update_bids_output_directory(): updates the BIDS formatted output directory
+    update_from_json(json_path: str): updates the configuration parameters from a new json file
+    
+    """
     def __init__(self, json_path: str):
         self._config = self._load_json_config(json_path)
         
@@ -59,53 +65,66 @@ class ExperimentConfig():
     def __str__(self):
         return str(self._config)
     
-    def df(self):
+    def df(self) -> pd.DataFrame:
         return pd.DataFrame(self._config.items(), columns=['Parameter', 'Value'])
-    
-    def __update_bids_output_directory(self):
-        date = datetime.datetime.now().strftime("%Y-%m-%d")
-        save_dir = self._config['save_dir']
-        protocol_id = self._config['protocol_id']
-        subject_id = self._config['subject_id']
-        session_id = self._config['session_id']
-        params = [date, protocol_id, subject_id, session_id]
-        #self.bids = pathlib.Path(save_dir) / '{}_{}_{}_{}'.format(*params)
-        bids = pathlib.Path(self._config['save_dir']) / f'{date}_{self._config["protocol_id"]}_{self._config["subject_id"]}_{self._config["session_id"]}'
-        self._config['bids'] = bids
-        return bids
     
     def _update_bids_output_directory(self):
         """
         Make a BIDS formatted directory 
-        
-        Accesses global variables for protocol_id, subject_id, session_id
-        
-        Organizes the directory structure as follows:
-        path/protocol_id-subject_id/ses-session_id/anat
-        """
-        save_dir = self._config['save_dir']
-        protocol_id = self._config['protocol_id']
-        subject_id = self._config['subject_id']
-        session_id = self._config['session_id']
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S') # get current timestamp
-        anat_dir = os.path.join(save_dir, f"{protocol_id}-{subject_id}", f"ses-{session_id}", "anat")
-        os.makedirs(anat_dir, exist_ok=True) # create the directory if it doesn't exist
-        bids_sub_dir = os.path.join(anat_dir, f"sub-{subject_id}_ses-{session_id}_{timestamp}")
-        self._config['sub_dir'] = bids_sub_dir
 
+        Organizes the directory structure as follows:
+        save_dir/protocol_id-subject_id/ses-session_id/anat
+        """
+        try:
+            save_dir = self._config['save_dir']
+            protocol = self._config['protocol']
+            subject = self._config['subject']
+            session = self._config['session']
+        except KeyError:
+            raise KeyError("Missing required keys to build BIDS formatted directory from json configuration file.")
+
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S') # get current timestamp
+        anat_dir = os.path.join(save_dir, f"{protocol}", f"sub-{subject}", f"ses-{session}", "func")
+        os.makedirs(anat_dir, exist_ok=True) # create the directory if it doesn't exist
+        bids_sub_dir = os.path.join(anat_dir, f"sub-{subject}_ses-{session}_{timestamp}.tiff") # the .tiff tells the record button lambda function to save as tiff
+        self._config['sub_dir'] = bids_sub_dir
     
     def update_from_json(self, json_path: str):
         self._config = self._load_json_config(json_path)
         self._update_bids_output_directory()
 
-
 class AcquisitionEngine(Container):
+    """ AcquisitionEngine object for the napari-mesofield plugin
+    This class is a subclass of the Container class from the magicgui.widgets module.
+    The object connects to the Micro-Manager Core object instance and the napari viewer object.
+
+    __init__: initializes the AcquisitionEngine Widget
+        self.config is an ExperimentConfig object that loads the configuration parameters from a json file
+        
+        self._gui_json_directory: a FileEdit widget to load a new json file
+            connects to the _update_experiment_config() method
+        self._gui_load_json_file: a PushButton widget to load the new json file
+            connects to the _update_experiment_config() method
+        self._gui_config_table: a Table widget to display the configuration parameters
+            connects to the _update_experiment_config() method
+        self._gui_record_button: a PushButton widget to start recording
+            connects to the run_sequence() method
+        self._gui_psychopy_button: a PushButton widget to launch the PsychoPy experiment
+            connects to the launch_psychopy() method
+        self._gui_trigger_checkbox: a CheckBox widget to start recording on trigger
+        
+    _update_experiment_config: updates the experiment configuration from a new json file
+    run_sequence: runs the MDA sequence with the configuration parameters
+    launch_psychopy: launches the PsychoPy experiment as a subprocess with ExperimentConfig parameters
+    """
     def __init__(self, viewer: "napari.viewer.Viewer", mmc: pymmcore_plus.CMMCorePlus, config_path: str = JSON_PATH):
         super().__init__()
         self._viewer = viewer
         self._mmc = mmc
-        self.config = ExperimentConfig(config_path)        
+        self.config = ExperimentConfig(config_path)    
+        self.sequence = self.config.sequence = useq.MDASequence( time_plan={"interval":0, "loops": 500},)    
         
+        #### GUI Widgets ####
         self._gui_json_directory = create_widget(
             label='JSON Config Path:', widget_type='FileEdit', value=JSON_PATH
         )
@@ -119,69 +138,141 @@ class AcquisitionEngine(Container):
         self._gui_record_button = create_widget(
             label='Record', widget_type='PushButton'
         )
+        self._gui_psychopy_button = create_widget(
+            label='Launch PsychoPy', widget_type='PushButton'
+        )
         
+        #### Callback connections between widget values and functions ####
         self._gui_trigger_checkbox = CheckBox(text='Start on Trigger')
         self._gui_trigger_checkbox.value = self.config.start_on_trigger
-        
-        ### Callback connections between widget values and functions
-        self._gui_trigger_checkbox.changed.connect(lambda: self.config.__setattr__('start_on_trigger', self._gui_trigger_checkbox.value))
+        self._gui_trigger_checkbox.changed.connect(lambda: self.config['start_on_trigger', self._gui_trigger_checkbox.value]) #TODO dynamically update trigger status
         self._gui_json_directory.changed.connect(self._update_experiment_config)
-        self._gui_record_button.changed.connect(self.run_sequence)
+        self._gui_record_button.changed.connect(lambda: self._mmc.run_mda(self.config.sequence, output=self.config.sub_dir))
+        self._gui_psychopy_button.changed.connect(self.launch_psychopy)
         
+        # Add the widgets to the container
         self.extend(
             [
                 self._gui_trigger_checkbox,
                 self._gui_json_directory,
                 self._gui_config_table,
-                self._gui_record_button
+                self._gui_record_button,
+                self._gui_psychopy_button
             ]
         )
         
     def _update_experiment_config(self):
+        # utility function to update the experiment configuration from a new json file loaded to the json FileEdit widget
         json_path = self._gui_json_directory.value
         self.config.update_from_json(json_path)
-        self.config.start_on_trigger = self._gui_trigger_checkbox.value
+        self.config.start_on_trigger = self._gui_trigger_checkbox.value # TODO: update the start_on_trigger value checkbox in gui (?)
         self._gui_config_table.value = self.config.df()
     
+    def launch_psychopy(self):
+        """ Launches a PsychoPy experiment as a subprocess with the current ExperimentConfig parameters """
+        
+        # TODO: Error handling for presence of ExperimentConfig parameters required for PsychoPy experiment
+        import subprocess
+        self.config.num_trials = 2 # TODO: Link implicity to the number of frames in the MDA sequence to coordinate synchronous timing
+        subprocess.Popen(["C:\Program Files\PsychoPy\python.exe", "D:\jgronemeyer\Experiment\Gratings_vis_0.6.py", 
+                         f'{self.config.protocol}', f'{self.config.subject}', f'{self.config.session}', f'{self.config.save_dir}',
+                         f'{self.config.num_trials}'], start_new_session=True)
+
     def run_sequence(self):
+        """ Runs the Multi-Dimensional Acquisition sequence with the current ExperimentConfig parameters """
+        import napari_micromanager as nm
+        wait_for_trigger = self.config.start_on_trigger
         n_frames = self.config.num_frames
         
+        # Create the MDA sequence. Note: time_plan has an interval 0 to start a ContinuousAcquisitionSequence
         self.config.sequence = useq.MDASequence(
             time_plan={"interval":0, "loops": n_frames}, 
         )
         
-        if self.config.start_on_trigger:
+        # Wait for spacebar press if start_on_trigger is True
+        if wait_for_trigger:
             print("Press spacebar to start recording...")
-            keyboard.wait('space')
-            
-        with mda_listeners_connected(ImageSequenceWriter(self.config.sub_dir)):
-            self._mmc.mda.run(self.config.sequence)
-            
+            while not keyboard.is_pressed('space'):
+                pass
+            self.config.keyb_start = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Run the MDA sequence with the ImageSequenceWriter context manager to save each image from the MMCore sequence to ExperimentConfig.sub_dir
+        with mda_listeners_connected(self.config.writer):
+            self._mmc.run_mda(self.config.sequence)
+   
         return
 
-@magicgui(call_button='load arduino', mmc={'bind': pymmcore_plus.CMMCorePlus.instance()})   
-def load_mmc_params(mmc):
+@magicgui(call_button='Start LED', mmc={'bind': pymmcore_plus.CMMCorePlus.instance()})   
+def load_arduino_led(mmc):
+    """ Load Arduino-Switch device with a sequence pattern and start the sequence """
+    
     mmc.getPropertyObject('Arduino-Switch', 'State').loadSequence(['4', '4', '2', '2'])
-    mmc.mda.engine.use_hardware_sequencing = True
-    mmc.setProperty('Arduino-Switch', 'Sequence', 'On')
-    mmc.setProperty('Arduino-Shutter', 'OnOff', '1')
-    mmc.setProperty('Dhyana', 'Output Trigger Port', '2')
-    mmc.setProperty('Core', 'Shutter', 'Arduino-Shutter')
-    mmc.setProperty('Dhyana', 'Gain', 'HDR')
-    mmc.setChannelGroup('Channel')
-    mmc.getPropertyObject('Arduino-Switch', 'State').setValue(4)
+    mmc.getPropertyObject('Arduino-Switch', 'State').setValue(4) # seems essential to initiate serial communication
     mmc.getPropertyObject('Arduino-Switch', 'State').startSequence()
 
     print('Arduino loaded')
 
 @magicgui(call_button='Stop LED', mmc={'bind': pymmcore_plus.CMMCorePlus.instance()})
 def stop_led(mmc):
+    """ Stop the Arduino-Switch LED sequence """
+    
     mmc.getPropertyObject('Arduino-Switch', 'State').stopSequence()
 
-@magicgui(call_button='Launch PsychoPy')
-def launch_psychopy():
-    os.startfile(PSYCHOPY_PATH)
+def start_dhyana():
 
+    print("launching Dhyana interface...")
+    
+    def load_mmc_params(mmc):
+        print('Loading Dhyana parameters')
+        mmc.loadSystemConfiguration(DHYANA_CONFIG)
+        mmc.setProperty('Arduino-Switch', 'Sequence', 'On')
+        mmc.setProperty('Arduino-Shutter', 'OnOff', '1')
+        mmc.setProperty('Dhyana', 'Output Trigger Port', '2')
+        mmc.setProperty('Core', 'Shutter', 'Arduino-Shutter')
+        mmc.setProperty('Dhyana', 'Gain', 'HDR')
+        mmc.setChannelGroup('Channel')
+
+    viewer = napari.Viewer()
+    viewer.window.add_plugin_dock_widget('napari-micromanager')
+    mmc = pymmcore_plus.CMMCorePlus.instance()
+    mesofield = AcquisitionEngine(viewer, mmc)
+    #load_mmc_params(mmc)
+    viewer.window.add_dock_widget([mesofield, load_arduino_led, stop_led], 
+                                  area='right')
+    mmc.mda.engine.use_hardware_sequencing = True
+    print("Dhyana interface launched.")
+    
+    napari.run()
+    viewer.update_console(locals()) # https://github.com/napari/napari/blob/main/examples/update_console.py
+
+def start_thorcam():
+    mmc2 = pymmcore_plus.CMMCorePlus()
+    mmc2.loadSystemConfiguration(THOR_CONFIG)
+    mmc2.setROI("ThorCam", 440, 305, 509, 509)
+    viewer = napari.view_image(mmc2.snap(), name='pupil_viewer')
+    #viewer.window.add_dock_widget([record_from_buffer, start_sequence])
+    #pupil_cam = AcquisitionEngine(viewer, pupil_mmc, PUPIL_JSON)
+    #pupil_viewer.window.add_plugin_dock_widget('napari-micromanager')
+    #pupil_viewer.window.add_dock_widget([pupil_cam], area='right')
+
+# Launch Napari with the custom widget
+if __name__ == "__main__":
+    print("Starting Sipefield Napari Acquisition Interface...")
+    start_dhyana()
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 # @magicgui(call_button='Record', viewer={'bind': napari.current_viewer()})
 # def pupil_sequence(mesofield: AcquisitionEngine):
     
@@ -207,30 +298,3 @@ def launch_psychopy():
 #     mmc2.setROI("ThorCam", 440, 305, 509, 509)
 #     viewer2 = napari.view_image(mmc2.snap(), name='pupil_viewer')
 #     viewer2.window.add_dock_widget([pupil_sequence], area='right')
-
-def start_napari():
-    
-    print("launching interface...")
-    mmc = pymmcore_plus.CMMCorePlus.instance()
-    mmc.loadSystemConfiguration(DHYANA_CONFIG)
-    #pupil_mmc = pymmcore_plus.CMMCorePlus()
-    #pupil_mmc.loadSystemConfiguration(THOR_CONFIG)
-    viewer = napari.Viewer()
-    #pupil_viewer = napari.Viewer()
-    #pupil_cam = AcquisitionEngine(viewer, pupil_mmc, PUPIL_JSON)
-    mesofield = AcquisitionEngine(viewer, mmc)
-    #pupil_viewer.window.add_plugin_dock_widget('napari-micromanager')
-    #pupil_viewer.window.add_dock_widget([pupil_cam], area='right')
-    viewer.window.add_plugin_dock_widget('napari-micromanager')
-    viewer.window.add_dock_widget([mesofield, load_mmc_params, launch_psychopy, stop_led], 
-                                  area='right')
-
-    print("interface launched.")
-
-    viewer.update_console(locals()) # https://github.com/napari/napari/blob/main/examples/update_console.py
-    napari.run()
-
-# Launch Napari with the custom widget
-if __name__ == "__main__":
-    print("Starting Sipefield Napari Acquisition Interface...")
-    start_napari()
