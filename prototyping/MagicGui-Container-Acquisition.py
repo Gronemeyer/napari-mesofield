@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 import os
 import useq
+from useq import MDASequence
 from pymmcore_plus.mda.handlers import OMEZarrWriter, OMETiffWriter, ImageSequenceWriter
 from pymmcore_plus.mda import mda_listeners_connected
 
@@ -30,125 +31,187 @@ PUPIL_JSON = r'C:\sipefield\napari-mesofield\prototyping\camk2-gcamp8_pupil.json
 from magicgui.widgets import Container, CheckBox, create_widget
 import json
 import keyboard
-
-class ExperimentConfig():
-    """ 
-    Class to dynamically handle an experiment configuration loaded from a json file
+class ExperimentConfig:
+    """## Generate and store parameters loaded from a JSON file. 
     
-    Attributes:
-    - config: dict containing the configuration parameters loaded from a json file
-    
-    Methods:
-    df() -> pd.DataFrame: returns a pandas DataFrame of the configuration parameters
-    _update_bids_output_directory(): updates the BIDS formatted output directory
-    update_from_json(json_path: str): updates the configuration parameters from a new json file
-    
+    #### Example Usage:
+        ```
+        config = ExperimentConfig()
+            # create dict and pandas DataFrame from JSON file path:
+        config.load_parameters('path/to/json_file.json')
+            # update the 'subject' parameter to '001':
+        config.update_parameter('subject', '001') 
+            # return the value of the 'subject' parameter:
+        config.parameters.get('subject') 
+            # return a pandas DataFrame with 'Parameter' and 'Value' columns:
+        config.get_parameters_dataframe()
+        ```
     """
-    def __init__(self, json_path: str):
-        self._config = self._load_json_config(json_path)
+
+    def __init__(self):
+        """ Initialize the ExperimentParameters class. 
+        """
         
-    def _load_json_config(self, json_path: str):
-        with open(json_path) as file:
-            config = json.load(file)
-        return config
-    
-    def __getattr__(self, key):
-        return self._config.get(key)
-    
-    def __setattr__(self, key, value):
-        if key == '_config':
-            super().__setattr__(key, value)
-        else:
-            self._config[key] = value
-            self._update_bids_output_directory()
-    
-    def __str__(self):
-        return str(self._config)
-    
-    def df(self) -> pd.DataFrame:
-        return pd.DataFrame(self._config.items(), columns=['Parameter', 'Value'])
-    
-    def _update_bids_output_directory(self):
-        """
-        Make a BIDS formatted directory 
+        self._parameters = {}
+        self._dataframe = pd.DataFrame()
+        self._output_path = ''
 
-        Organizes the directory structure as follows:
-        save_dir/protocol_id-subject_id/ses-session_id/anat
+    def load_parameters(self, json_file_path) -> None:
+        """ Load parameters from a JSON file path. 
         """
+        
         try:
-            save_dir = self._config['save_dir']
-            protocol = self._config['protocol']
-            subject = self._config['subject']
-            session = self._config['session']
-        except KeyError:
-            raise KeyError("Missing required keys to build BIDS formatted directory from json configuration file.")
+            with open(json_file_path, 'r') as f: # TODO: open json file in writing mode to update parameters
+                self._parameters = json.load(f)
+        except FileNotFoundError:
+            print(f"File not found: {json_file_path}")
+            return
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON: {e}")
+            return
 
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S') # get current timestamp
-        anat_dir = os.path.join(save_dir, f"{protocol}", f"sub-{subject}", f"ses-{session}", "func")
-        os.makedirs(anat_dir, exist_ok=True) # create the directory if it doesn't exist
-        bids_sub_dir = os.path.join(anat_dir, f"sub-{subject}_ses-{session}_{timestamp}.tiff") # the .tiff tells the record button lambda function to save as tiff
-        self._config['sub_dir'] = bids_sub_dir
-    
-    def update_from_json(self, json_path: str):
-        self._config = self._load_json_config(json_path)
-        self._update_bids_output_directory()
+        # Update the dataframe
+        self._dataframe = pd.DataFrame([self._parameters])
+
+        # Update the output path
+        self._create_bids_output_path()
+        
+        self.update_parameter('writer', OMETiffWriter(self._output_path))
+
+    def _create_bids_output_path(self):
+        """ Create a BIDS-formatted output path based on the loaded parameters.
+        """
+        
+        # Implement logic to create BIDS formatted output path
+        # For example, BIDS output path can be constructed using subject, session, task, etc.
+        subject = self._parameters.get('subject', 'unknown')
+        session = self._parameters.get('session', 'unknown')
+        task = self._parameters.get('task', 'unknown')
+        save_dir = self._parameters.get('save_dir', 'unknown')
+
+        # Construct the directory path
+        directory_path = os.path.join(
+            f"sub-{subject}",
+            f"ses-{session}",
+            'func'
+        )
+
+        # Construct the filename
+        filename = f"sub-{subject}_ses-{session}_task-{task}.ome.tiff"
+
+        # Combine directory and filename
+        self._output_path = os.path.join(save_dir, directory_path, filename)
+
+    def __getattr__(self, val):
+        """ 
+        Allow getting a parameter directly as an attribute.
+        """
+        if val in self._parameters:
+            return self._parameters[val]
+        raise AttributeError(f"'ExperimentConfig' object has no attribute '{val}'")
+
+    @property
+    def parameters(self) -> dict:
+        """  
+        Get the parameters dictionary.  
+        """
+        return self._parameters
+
+    @property
+    def dataframe(self) -> pd.DataFrame:
+        """ 
+        Get the parameters as a pandas DataFrame. 
+        """
+        return self._dataframe
+
+    @property
+    def output_path(self) -> str:
+        """ 
+        Get the BIDS-formatted output path. 
+        """
+        return self._output_path
+
+    def update_parameter(self, key, value):
+        """ 
+        Update a parameter in the parameters dictionary and DataFrame.
+        
+        - *key (str)*: The parameter key to update.
+        
+        - *value*: The new value for the parameter.
+        """
+        self._parameters[key] = value
+        # Update the dataframe
+        self._dataframe[key] = [value]
+        # Update the output path in case relevant BIDS parameters have changed
+        if key in ['subject', 'session', 'task']:
+            self._create_bids_output_path()
+
+    def reload_parameters(self, json_file_path: str):
+        """ 
+        Reload parameters from a new JSON file. 
+        """
+        self.load_parameters(json_file_path)
+        
+    def get_parameters_dataframe(self):
+        """ Returns the parameters as a DataFrame with 'Parameter' and 'Value' columns.
+        """
+        data = {'Parameter': list(self._parameters.keys()),
+                'Value': list(self._parameters.values())}
+        return pd.DataFrame(data)
 
 class AcquisitionEngine(Container):
     """ AcquisitionEngine object for the napari-mesofield plugin
     This class is a subclass of the Container class from the magicgui.widgets module.
     The object connects to the Micro-Manager Core object instance and the napari viewer object.
-
-    __init__: initializes the AcquisitionEngine Widget
-        self.config is an ExperimentConfig object that loads the configuration parameters from a json file
-        
-        self._gui_json_directory: a FileEdit widget to load a new json file
-            connects to the _update_experiment_config() method
-        self._gui_load_json_file: a PushButton widget to load the new json file
-            connects to the _update_experiment_config() method
-        self._gui_config_table: a Table widget to display the configuration parameters
-            connects to the _update_experiment_config() method
-        self._gui_record_button: a PushButton widget to start recording
-            connects to the run_sequence() method
-        self._gui_psychopy_button: a PushButton widget to launch the PsychoPy experiment
-            connects to the launch_psychopy() method
-        self._gui_trigger_checkbox: a CheckBox widget to start recording on trigger
-        
-    _update_experiment_config: updates the experiment configuration from a new json file
+ 
+    _update_config: updates the experiment configuration from a new json file
+    
     run_sequence: runs the MDA sequence with the configuration parameters
+    
     launch_psychopy: launches the PsychoPy experiment as a subprocess with ExperimentConfig parameters
     """
-    def __init__(self, viewer: "napari.viewer.Viewer", mmc: pymmcore_plus.CMMCorePlus, config_path: str = JSON_PATH):
+    def __init__(self, viewer: "napari.viewer.Viewer", mmc: pymmcore_plus.CMMCorePlus):
         super().__init__()
         self._viewer = viewer
         self._mmc = mmc
-        self.config = ExperimentConfig(config_path)    
-        self.sequence = self.config.sequence = useq.MDASequence( time_plan={"interval":0, "loops": 500},)    
+        self.config = ExperimentConfig()   
         
         #### GUI Widgets ####
+        # File directory for JSON configuration
         self._gui_json_directory = create_widget(
-            label='JSON Config Path:', widget_type='FileEdit', value=JSON_PATH
+            label='JSON Config Path:', widget_type='FileEdit', options={'filter': '*.json'}
         )
-        self._gui_load_json_file = create_widget(
-            label='Load JSON Config:', widget_type='PushButton'
-        )
+        # Table widget to display the configuration parameters
         self._gui_config_table = create_widget(
             label='Experiment Config:', widget_type='Table', is_result=True, 
-            value=self.config.df()
+            value=self.config.get_parameters_dataframe()
         )
+        self._gui_config_table.read_only = False  # Allow user input to edit the table #TODO: is this necessary?
+        self._gui_config_table.changed.connect(self._on_table_edit) # Connect to table update function
+        
+        # Record button to start the MDA sequence
         self._gui_record_button = create_widget(
             label='Record', widget_type='PushButton'
         )
+        # Launch PsychoPy button to start the PsychoPy experiment
         self._gui_psychopy_button = create_widget(
             label='Launch PsychoPy', widget_type='PushButton'
         )
         
         #### Callback connections between widget values and functions ####
+        # Checkbox to start the MDA sequence on trigger
         self._gui_trigger_checkbox = CheckBox(text='Start on Trigger')
-        self._gui_trigger_checkbox.value = self.config.start_on_trigger
-        self._gui_trigger_checkbox.changed.connect(lambda: self.config['start_on_trigger', self._gui_trigger_checkbox.value]) #TODO dynamically update trigger status
-        self._gui_json_directory.changed.connect(self._update_experiment_config)
-        self._gui_record_button.changed.connect(lambda: self._mmc.run_mda(self.config.sequence, output=self.config.sub_dir))
+        self._gui_trigger_checkbox.value = self.config.parameters.get('start_on_trigger', False)
+        self._gui_trigger_checkbox.changed.connect(self._on_trigger_checkbox_changed) 
+        # Load the JSON configuration file
+        self._gui_json_directory.changed.connect(self._update_config)
+        # Run the MDA sequence upon button press
+        self._gui_record_button.changed.connect(lambda: self._mmc.run_mda(MDASequence(time_plan={"interval":0, "loops": self.config.num_frames}), 
+                                                                          output=self.config._output_path))
+        # Launch the PsychoPy experiment upon button press
         self._gui_psychopy_button.changed.connect(self.launch_psychopy)
+        # Update the configuration parameters when the table is edited
+        self._gui_config_table.changed.connect(self._on_table_edit)
         
         # Add the widgets to the container
         self.extend(
@@ -161,31 +224,81 @@ class AcquisitionEngine(Container):
             ]
         )
         
-    def _update_experiment_config(self):
+    def _update_config(self):
         # utility function to update the experiment configuration from a new json file loaded to the json FileEdit widget
         json_path = self._gui_json_directory.value
-        self.config.update_from_json(json_path)
-        self.config.start_on_trigger = self._gui_trigger_checkbox.value # TODO: update the start_on_trigger value checkbox in gui (?)
-        self._gui_config_table.value = self.config.df()
+        if json_path and os.path.isfile(json_path):
+            try:
+                self.config.reload_parameters(json_path)
+                self.config.update_parameter('start_on_trigger', self._gui_trigger_checkbox.value)
+                # Refresh the GUI table
+                self._refresh_config_table()
+            except Exception as e:
+                print(f"Invalid json_path: {json_path}. Skipping configuration update.")
+    
+    def _on_table_edit(self, event=None):
+        """
+        Update the configuration parameters when the table is edited.
+        """
+        # Retrieve the updated DataFrame from the table
+        table_value = self._gui_config_table.value
+        df = pd.DataFrame(**table_value)
+        if not df.empty:
+            # Update the parameters in the config
+            for index, row in df.iterrows():
+                key = row['Parameter']
+                value = row['Value']
+                self.config.update_parameter(key, value)
+            # Regenerate the sequence or output path if needed
+            if 'sequence' in self.config.parameters:
+                self.sequence = self.config.parameters.get('sequence')
+            # Update other GUI elements if necessary
+            self._refresh_gui_elements()
+
+    def _refresh_gui_elements(self):
+        """
+        Refresh GUI elements that may depend on configuration parameters.
+        """
+        # Update trigger checkbox if 'start_on_trigger' was changed via the table
+        value = self.config.parameters.get('start_on_trigger')
+        if value is None:
+            value = self._gui_trigger_checkbox.value
+        self._gui_trigger_checkbox.value = value
+        # Refresh other GUI elements as needed
+        
+    def _on_trigger_checkbox_changed(self):
+        self.config.update_parameter('start_on_trigger', self._gui_trigger_checkbox.value)
+        # Refresh the table
+        self._refresh_config_table()
+    
+    def _refresh_config_table(self):
+        """
+        Refresh the configuration table to reflect current parameters.
+        """
+        # Update the table value
+        self._gui_config_table.value = self.config.get_parameters_dataframe()
     
     def launch_psychopy(self):
-        """ Launches a PsychoPy experiment as a subprocess with the current ExperimentConfig parameters """
+        """ 
+        Launches a PsychoPy experiment as a subprocess with the current ExperimentConfig parameters 
+        """
         
         # TODO: Error handling for presence of ExperimentConfig parameters required for PsychoPy experiment
         import subprocess
-        self.config.num_trials = 2 # TODO: Link implicity to the number of frames in the MDA sequence to coordinate synchronous timing
+        self.config.update_parameter('num_trials', 2) # TODO: Link implicity to the number of frames in the MDA sequence to coordinate synchronous timing
         subprocess.Popen(["C:\Program Files\PsychoPy\python.exe", "D:\jgronemeyer\Experiment\Gratings_vis_0.6.py", 
                          f'{self.config.protocol}', f'{self.config.subject}', f'{self.config.session}', f'{self.config.save_dir}',
                          f'{self.config.num_trials}'], start_new_session=True)
 
     def run_sequence(self):
-        """ Runs the Multi-Dimensional Acquisition sequence with the current ExperimentConfig parameters """
-        import napari_micromanager as nm
+        """ 
+        Runs the Multi-Dimensional Acquisition sequence with the current ExperimentConfig parameters 
+        """
         wait_for_trigger = self.config.start_on_trigger
-        n_frames = self.config.num_frames
+        n_frames = int(self.config.parameters.get('num_frames', 100)) #default 100 frames if not specified
         
         # Create the MDA sequence. Note: time_plan has an interval 0 to start a ContinuousAcquisitionSequence
-        self.config.sequence = useq.MDASequence(
+        sequence = useq.MDASequence(
             time_plan={"interval":0, "loops": n_frames}, 
         )
         
@@ -194,11 +307,9 @@ class AcquisitionEngine(Container):
             print("Press spacebar to start recording...")
             while not keyboard.is_pressed('space'):
                 pass
-            self.config.keyb_start = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            self.config.update_parameter('keyb_trigger_timestamp', datetime.datetime.now().strftime('%Y%m%d_%H%M%S'))
         
-        # Run the MDA sequence with the ImageSequenceWriter context manager to save each image from the MMCore sequence to ExperimentConfig.sub_dir
-        with mda_listeners_connected(self.config.writer):
-            self._mmc.run_mda(self.config.sequence)
+        self._mmc.run_mda(sequence, output=self.config._output_path)
    
         return
 
@@ -242,8 +353,8 @@ def start_dhyana():
     mmc.mda.engine.use_hardware_sequencing = True
     print("Dhyana interface launched.")
     
-    napari.run()
     viewer.update_console(locals()) # https://github.com/napari/napari/blob/main/examples/update_console.py
+    napari.run()
 
 def start_thorcam():
     mmc2 = pymmcore_plus.CMMCorePlus()
