@@ -76,8 +76,6 @@ class ExperimentConfig:
         # Update the output path
         self._create_bids_output_path()
         
-        self.update_parameter('writer', OMETiffWriter(self._output_path))
-
     def _create_bids_output_path(self):
         """ Create a BIDS-formatted output path based on the loaded parameters.
         """
@@ -98,9 +96,9 @@ class ExperimentConfig:
 
         # Construct the filename
         filename = f"sub-{subject}_ses-{session}_task-{task}.ome.tiff"
-
+        self.update_parameter('filename', filename)
         # Combine directory and filename
-        self._output_path = os.path.join(save_dir, directory_path, filename)
+        self._output_path = os.path.join(save_dir, directory_path)
 
     def __getattr__(self, val):
         """ 
@@ -207,7 +205,7 @@ class AcquisitionEngine(Container):
         self._gui_json_directory.changed.connect(self._update_config)
         # Run the MDA sequence upon button press
         self._gui_record_button.changed.connect(lambda: self._mmc.run_mda(MDASequence(time_plan={"interval":0, "loops": self.config.num_frames}), 
-                                                                          output=self.config._output_path))
+                                                                          output=self._create_save_directory()))
         # Launch the PsychoPy experiment upon button press
         self._gui_psychopy_button.changed.connect(self.launch_psychopy)
         # Update the configuration parameters when the table is edited
@@ -223,18 +221,26 @@ class AcquisitionEngine(Container):
                 self._gui_psychopy_button
             ]
         )
-        
+    
+    def _create_save_directory(self):
+        file = self.config.filename
+        dir = self.config.output_path
+        os.makedirs(dir, exist_ok=True)
+        file_dir = os.path.join(dir, file)
+        os.makedirs(file_dir, exist_ok=True)
+        return file_dir
+    
     def _update_config(self):
         # utility function to update the experiment configuration from a new json file loaded to the json FileEdit widget
         json_path = self._gui_json_directory.value
         if json_path and os.path.isfile(json_path):
-            try:
-                self.config.reload_parameters(json_path)
-                self.config.update_parameter('start_on_trigger', self._gui_trigger_checkbox.value)
-                # Refresh the GUI table
-                self._refresh_config_table()
-            except Exception as e:
-                print(f"Invalid json_path: {json_path}. Skipping configuration update.")
+            #try:
+            self.config.reload_parameters(json_path)
+            self.config.update_parameter('start_on_trigger', self._gui_trigger_checkbox.value)
+            # Refresh the GUI table
+            self._refresh_config_table()
+            # except Exception as e:
+            #     print(f"Invalid json_path: {json_path}. Skipping configuration update.")
     
     def _on_table_edit(self, event=None):
         """
@@ -249,9 +255,6 @@ class AcquisitionEngine(Container):
                 key = row['Parameter']
                 value = row['Value']
                 self.config.update_parameter(key, value)
-            # Regenerate the sequence or output path if needed
-            if 'sequence' in self.config.parameters:
-                self.sequence = self.config.parameters.get('sequence')
             # Update other GUI elements if necessary
             self._refresh_gui_elements()
 
@@ -260,9 +263,9 @@ class AcquisitionEngine(Container):
         Refresh GUI elements that may depend on configuration parameters.
         """
         # Update trigger checkbox if 'start_on_trigger' was changed via the table
-        value = self.config.parameters.get('start_on_trigger')
+        value = bool(self.config.parameters.get('start_on_trigger'))
         if value is None:
-            value = self._gui_trigger_checkbox.value
+            value = bool(self._gui_trigger_checkbox.value)
         self._gui_trigger_checkbox.value = value
         # Refresh other GUI elements as needed
         
@@ -295,7 +298,9 @@ class AcquisitionEngine(Container):
         Runs the Multi-Dimensional Acquisition sequence with the current ExperimentConfig parameters 
         """
         wait_for_trigger = self.config.start_on_trigger
+        #TODO key error handling for integer
         n_frames = int(self.config.parameters.get('num_frames', 100)) #default 100 frames if not specified
+        os.makedirs(self.config._output_path, exist_ok=True)
         
         # Create the MDA sequence. Note: time_plan has an interval 0 to start a ContinuousAcquisitionSequence
         sequence = useq.MDASequence(
