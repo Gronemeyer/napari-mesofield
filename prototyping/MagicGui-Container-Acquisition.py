@@ -223,24 +223,35 @@ class AcquisitionEngine(Container):
         )
     
     def _create_save_directory(self):
-        file = self.config.filename
+        """ 
+        Create save directory and return directory + filename.tiff for tifffile writer.
+        If the filename exists in directory, then append a number to the filename.
+        """
+        file = self.config.parameters.get('filename', 'default.ome.tiff')
         dir = self.config.output_path
         os.makedirs(dir, exist_ok=True)
+        
+        base, ext = os.path.splitext(file)
+        counter = 1
         file_dir = os.path.join(dir, file)
-        os.makedirs(file_dir, exist_ok=True)
+        
+        while os.path.exists(file_dir):
+            file_dir = os.path.join(dir, f"{base}_{counter}{ext}")
+            counter += 1
+        
         return file_dir
     
     def _update_config(self):
         # utility function to update the experiment configuration from a new json file loaded to the json FileEdit widget
         json_path = self._gui_json_directory.value
         if json_path and os.path.isfile(json_path):
-            #try:
-            self.config.reload_parameters(json_path)
-            self.config.update_parameter('start_on_trigger', self._gui_trigger_checkbox.value)
-            # Refresh the GUI table
-            self._refresh_config_table()
-            # except Exception as e:
-            #     print(f"Invalid json_path: {json_path}. Skipping configuration update.")
+            try:
+                self.config.reload_parameters(json_path)
+                self.config.update_parameter('start_on_trigger', self._gui_trigger_checkbox.value)
+                # Refresh the GUI table
+                self._refresh_config_table()
+            except Exception as e:
+                print(f"Trouble updating ExperimentConfig from Acquisition engine:\n {json_path}. \nConfiguration not updated")
     
     def _on_table_edit(self, event=None):
         """
@@ -263,9 +274,9 @@ class AcquisitionEngine(Container):
         Refresh GUI elements that may depend on configuration parameters.
         """
         # Update trigger checkbox if 'start_on_trigger' was changed via the table
-        value = bool(self.config.parameters.get('start_on_trigger'))
+        value = self.config.parameters.get('start_on_trigger')
         if value is None:
-            value = bool(self._gui_trigger_checkbox.value)
+            value = self._gui_trigger_checkbox.value
         self._gui_trigger_checkbox.value = value
         # Refresh other GUI elements as needed
         
