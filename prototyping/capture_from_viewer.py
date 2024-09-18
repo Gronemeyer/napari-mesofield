@@ -45,6 +45,8 @@ def pupil_cam():
 @magicgui(call_button='Launch PsychoPy')
 def launch_psychopy():
     os.startfile(PSYCHOPY_PATH)
+    os.system('"C:\Program Files\PsychoPy\python.exe" D:\jgronemeyer\Experiment\Gratings_vis_0.6.py %protocol% %subject% %session% %savedir%')
+
 
 
 @magicgui(auto_call=True, result_widget=True)

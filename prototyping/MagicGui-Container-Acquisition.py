@@ -82,6 +82,7 @@ class ExperimentConfig:
         
         # Implement logic to create BIDS formatted output path
         # For example, BIDS output path can be constructed using subject, session, task, etc.
+        protocol = self._parameters.get('protocol', 'unknown')
         subject = self._parameters.get('subject', 'unknown')
         session = self._parameters.get('session', 'unknown')
         task = self._parameters.get('task', 'unknown')
@@ -89,13 +90,14 @@ class ExperimentConfig:
 
         # Construct the directory path
         directory_path = os.path.join(
+            f"{protocol}",
             f"sub-{subject}",
             f"ses-{session}",
             'func'
         )
 
         # Construct the filename
-        filename = f"sub-{subject}_ses-{session}_task-{task}.ome.tiff"
+        filename = f"{protocol}-sub-{subject}_ses-{session}_task-{task}.ome.tiff"
         self.update_parameter('filename', filename)
         # Combine directory and filename
         self._output_path = os.path.join(save_dir, directory_path)
@@ -168,11 +170,12 @@ class AcquisitionEngine(Container):
     
     launch_psychopy: launches the PsychoPy experiment as a subprocess with ExperimentConfig parameters
     """
-    def __init__(self, viewer: "napari.viewer.Viewer", mmc: pymmcore_plus.CMMCorePlus):
+    def __init__(self, viewer: "napari.viewer.Viewer", mmc: pymmcore_plus.CMMCorePlus, mmc2: pymmcore_plus.CMMCorePlus = None):
         super().__init__()
         self._viewer = viewer
         self._mmc = mmc
-        self.config = ExperimentConfig()   
+        self._mmc2 = mmc2
+        self.config = ExperimentConfig()
         
         #### GUI Widgets ####
         # File directory for JSON configuration
@@ -204,8 +207,7 @@ class AcquisitionEngine(Container):
         # Load the JSON configuration file
         self._gui_json_directory.changed.connect(self._update_config)
         # Run the MDA sequence upon button press
-        self._gui_record_button.changed.connect(lambda: self._mmc.run_mda(MDASequence(time_plan={"interval":0, "loops": self.config.num_frames}), 
-                                                                          output=self._create_save_directory()))
+        self._gui_record_button.changed.connect(self.rec)
         # Launch the PsychoPy experiment upon button press
         self._gui_psychopy_button.changed.connect(self.launch_psychopy)
         # Update the configuration parameters when the table is edited
@@ -266,6 +268,7 @@ class AcquisitionEngine(Container):
                 key = row['Parameter']
                 value = row['Value']
                 self.config.update_parameter(key, value)
+            self.config._create_bids_output_path()
             # Update other GUI elements if necessary
             self._refresh_gui_elements()
 
@@ -296,10 +299,14 @@ class AcquisitionEngine(Container):
         """ 
         Launches a PsychoPy experiment as a subprocess with the current ExperimentConfig parameters 
         """
-        
+        # num_frames = num_trials × trial_time(5 seconds) × framerate (45 fps)
+        # num_trials = num_frames / (trial_time * framerate) (255 frames for a 5 seconds trial at 45 fps)
+        # Total duration = num_frames / framerate or num_trials * trial_time
+        num_trials = int(self.config.num_frames / (5 * 45))
         # TODO: Error handling for presence of ExperimentConfig parameters required for PsychoPy experiment
         import subprocess
-        self.config.update_parameter('num_trials', 2) # TODO: Link implicity to the number of frames in the MDA sequence to coordinate synchronous timing
+        
+        self.config.update_parameter('num_trials', num_trials) # TODO: Link implicity to the number of frames in the MDA sequence to coordinate synchronous timing
         subprocess.Popen(["C:\Program Files\PsychoPy\python.exe", "D:\jgronemeyer\Experiment\Gratings_vis_0.6.py", 
                          f'{self.config.protocol}', f'{self.config.subject}', f'{self.config.session}', f'{self.config.save_dir}',
                          f'{self.config.num_trials}'], start_new_session=True)
@@ -329,6 +336,18 @@ class AcquisitionEngine(Container):
    
         return
 
+    def rec(self):
+        # Wait for spacebar press if start_on_trigger is True
+        wait_for_trigger = self.config.start_on_trigger
+        if wait_for_trigger:
+            print("Press spacebar to start recording...")
+            while not keyboard.is_pressed('space'):
+                pass
+            self.config.update_parameter('keyb_trigger_timestamp', datetime.datetime.now().strftime('%Y%m%d_%H%M%S'))
+        self._mmc.run_mda(MDASequence(time_plan={"interval":0, "loops": self.config.num_frames}), 
+                                                                          output=self._create_save_directory())
+        return
+    
 @magicgui(call_button='Start LED', mmc={'bind': pymmcore_plus.CMMCorePlus.instance()})   
 def load_arduino_led(mmc):
     """ Load Arduino-Switch device with a sequence pattern and start the sequence """
@@ -345,19 +364,9 @@ def stop_led(mmc):
     
     mmc.getPropertyObject('Arduino-Switch', 'State').stopSequence()
 
-def start_dhyana():
+def start_dhyana(load_params=True, pupil=False):
 
     print("launching Dhyana interface...")
-    
-    def load_mmc_params(mmc):
-        print('Loading Dhyana parameters')
-        mmc.loadSystemConfiguration(DHYANA_CONFIG)
-        mmc.setProperty('Arduino-Switch', 'Sequence', 'On')
-        mmc.setProperty('Arduino-Shutter', 'OnOff', '1')
-        mmc.setProperty('Dhyana', 'Output Trigger Port', '2')
-        mmc.setProperty('Core', 'Shutter', 'Arduino-Shutter')
-        mmc.setProperty('Dhyana', 'Gain', 'HDR')
-        mmc.setChannelGroup('Channel')
 
     viewer = napari.Viewer()
     viewer.window.add_plugin_dock_widget('napari-micromanager')
@@ -367,27 +376,51 @@ def start_dhyana():
     viewer.window.add_dock_widget([mesofield, load_arduino_led, stop_led], 
                                   area='right')
     mmc.mda.engine.use_hardware_sequencing = True
-    print("Dhyana interface launched.")
     
+    if load_params:
+        load_dhyana_mmc_params(mmc)
+        print("Dhyana parameters loaded.")
+        
+    print("Dhyana interface launched.")
     viewer.update_console(locals()) # https://github.com/napari/napari/blob/main/examples/update_console.py
+    
+    if pupil:
+        start_thorcam()
+  
     napari.run()
 
 def start_thorcam():
-    mmc2 = pymmcore_plus.CMMCorePlus()
-    mmc2.loadSystemConfiguration(THOR_CONFIG)
-    mmc2.setROI("ThorCam", 440, 305, 509, 509)
-    viewer = napari.view_image(mmc2.snap(), name='pupil_viewer')
+    print("Starting ThorCam interface...")
+    mmc_thor = pymmcore_plus.CMMCorePlus()
+    mmc_thor.loadSystemConfiguration(THOR_CONFIG)
+    mmc_thor.setROI("ThorCam", 440, 305, 509, 509)
+    mmc_thor.setExposure(20)
+    mmc_thor.mda.engine.use_hardware_sequencing = True
+    pupil_viewer = napari.view_image(mmc_thor.snap(), name='pupil_viewer')
+    pupilcam = AcquisitionEngine(pupil_viewer, mmc_thor)
+    pupil_viewer.window.add_dock_widget([pupilcam], area='right')
     #viewer.window.add_dock_widget([record_from_buffer, start_sequence])
     #pupil_cam = AcquisitionEngine(viewer, pupil_mmc, PUPIL_JSON)
     #pupil_viewer.window.add_plugin_dock_widget('napari-micromanager')
     #pupil_viewer.window.add_dock_widget([pupil_cam], area='right')
+    
+    print("ThorCam interface launched.")
+    pupil_viewer.update_console(locals()) # https://github.com/napari/napari/blob/main/examples/update_console.py
+    #napari.run()
 
+def load_dhyana_mmc_params(mmc):
+    mmc.loadSystemConfiguration(DHYANA_CONFIG)
+    mmc.setProperty('Arduino-Switch', 'Sequence', 'On')
+    mmc.setProperty('Arduino-Shutter', 'OnOff', '1')
+    mmc.setProperty('Dhyana', 'Output Trigger Port', '2')
+    mmc.setProperty('Core', 'Shutter', 'Arduino-Shutter')
+    mmc.setProperty('Dhyana', 'Gain', 'HDR')
+    mmc.setChannelGroup('Channel')
+    
 # Launch Napari with the custom widget
 if __name__ == "__main__":
     print("Starting Sipefield Napari Acquisition Interface...")
-    start_dhyana()
-    
-    
+    start_dhyana(load_params=True, pupil=False)
     
     
     

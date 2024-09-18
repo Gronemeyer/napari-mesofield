@@ -1,8 +1,9 @@
 {
-    "save_dir": "D:/jgronemeyer/Experiment/data2",
-    "num_frames": 500,
+    "save_dir": "D:/jgronemeyer/Experiment/data",
+    "num_frames": 8000,
     "start_on_trigger": true,
-    "protocol": "Camkii-gcamp8",
-    "subject": "gs18",
-    "session": "01"
+    "protocol": "Camkii-gcamp6",
+    "subject": "sb12",
+    "session": "02",
+    "task": "widefield-no-vis"
 }
